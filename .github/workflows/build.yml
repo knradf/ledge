@@ -1,0 +1,24 @@
+# Builds Ledge on GitHub's macOS 26 Macs on every push, with the Xcode those
+# machines have. Catches code that only compiles with one version of Apple's
+# tools. It doesn't run Ledge (no display, no Paneru there).
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+      - name: Build
+        run: swift build -c release

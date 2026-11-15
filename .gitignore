@@ -1,0 +1,9 @@
+.build/
+build/
+*.xcodeproj/
+.swiftpm/
+.DS_Store
+# private: working notes and drafts, kept out of the repo
+CLAUDE.md
+.claude/
+notes/
