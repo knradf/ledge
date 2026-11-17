@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let swipes = TrackpadSwipes()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        quitOtherCopies()
         paneru.start()
         rules.start(paneru)
         battery.start()
@@ -73,6 +74,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return .terminateNow }
         Relaunch.now()
         return .terminateCancel
+    }
+
+    /// Two Ledges both act on every swipe and click (on 2026-11-17 a copy
+    /// opened from Finder outlived every restart and swiped the old way).
+    /// The newest one wins: a restart always leaves exactly one.
+    private func quitOtherCopies() {
+        guard let id = Bundle.main.bundleIdentifier else { return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: id)
+        where app.processIdentifier != me {
+            NSLog("Ledge: quitting another copy of Ledge (pid \(app.processIdentifier))")
+            if !app.terminate() { app.forceTerminate() }
+        }
     }
 
     @objc private func screensChanged() {

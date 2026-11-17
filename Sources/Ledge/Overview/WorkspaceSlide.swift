@@ -17,12 +17,24 @@ import ScreenCaptureKit
 /// runs in the system's render server, not in Ledge. Paneru switches behind,
 /// and the real screen shows once it has.
 ///
+/// A jump past other workspaces (clicking a pill) slides through them, so
+/// you see how far you went. Those flash by, so they're drawn from the
+/// overview's saved previews on the wallpaper (just the wallpaper when
+/// there are none), with nothing new to capture.
+///
 /// Clicks pass through. If anything can't be captured in time, it doesn't
 /// slide; the switch just happens.
 final class WorkspaceSlide {
     static let shared = WorkspaceSlide()
 
     static let duration: CFTimeInterval = 0.36
+    /// added for each workspace passed on the way, up to `longest`
+    static let perExtraStep: CFTimeInterval = 0.06
+    static let longest: CFTimeInterval = 0.5
+
+    static func duration(steps: Int) -> CFTimeInterval {
+        min(longest, duration + perExtraStep * CFTimeInterval(max(0, steps - 1)))
+    }
     /// quick to start, long soft landing
     static let timing = CAMediaTimingFunction(controlPoints: 0.3, 0.7, 0.1, 1)
     static let fadeOut: TimeInterval = 0.1
@@ -83,10 +95,12 @@ final class WorkspaceSlide {
     // MARK: sliding
 
     /// Slides to workspace `number` if it can. `switching` tells Paneru to
-    /// switch and calls back once it has. Returns false when it won't slide
-    /// (then the caller switches on its own).
+    /// switch and calls back once it has. `landed` runs once the real screen
+    /// shows again (anything run before that happens out of sight). Returns
+    /// false when it won't slide (then the caller switches on its own).
     func slide(to number: Int, rows: [OverviewRow],
-               switching: @escaping (@escaping () -> Void) -> Void) -> Bool {
+               switching: @escaping (@escaping () -> Void) -> Void,
+               landed: @escaping () -> Void) -> Bool {
         guard LedgeSettings.shared.workspaceSlide, !running,
               !OverviewController.shared.model.isOpen,
               CGPreflightScreenCaptureAccess(),
@@ -121,13 +135,16 @@ final class WorkspaceSlide {
         let windows = targetWindows.compactMap { window in
             placement[window.id].flatMap { frame in byID[window.id].map { (window: $0, frame: frame) } }
         }
+        let passing = Self.passingPages(
+            Array(stride(from: current.number + (down ? 1 : -1), to: number, by: down ? 1 : -1)),
+            rows: rows, remembered: lastFrames, like: leaving, screen: screen)
 
         // too slow to capture: switch without the slide
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureBudget) { [weak self] in
             guard let self, self.running, self.generation == token, self.panel?.isVisible != true else { return }
             self.generation += 1
             self.running = false
-            switching {}
+            switching(landed)
         }
 
         Task {
@@ -139,24 +156,25 @@ final class WorkspaceSlide {
                 guard let snapshot, cards.count == windows.count else {
                     self.generation += 1
                     self.running = false
-                    switching {}
+                    switching(landed)
                     return
                 }
-                self.run(on: screen, snapshot: snapshot, wallpaper: wallpaper, cards: cards,
-                         down: down, switching: switching)
+                self.run(on: screen, snapshot: snapshot, wallpaper: wallpaper, passing: passing, cards: cards,
+                         down: down, switching: switching, landed: landed)
             }
         }
         return true
     }
 
-    private func run(on screen: NSScreen, snapshot: CGImage, wallpaper: CGImage?, cards: [SlideCard],
-                     down: Bool, switching: @escaping (@escaping () -> Void) -> Void) {
+    private func run(on screen: NSScreen, snapshot: CGImage, wallpaper: CGImage?, passing: [[SlideCard]],
+                     cards: [SlideCard], down: Bool, switching: @escaping (@escaping () -> Void) -> Void,
+                     landed: @escaping () -> Void) {
         let panel = self.panel ?? makePanel()
         self.panel = panel
         panel.setFrame(screen.frame, display: false)
         guard let view else { return }
         view.frame = NSRect(origin: .zero, size: screen.frame.size)
-        view.prepare(snapshot: snapshot, wallpaper: wallpaper, cards: cards, down: down,
+        view.prepare(snapshot: snapshot, wallpaper: wallpaper, passing: passing, cards: cards, down: down,
                      scale: screen.backingScaleFactor)
         panel.alphaValue = 1
         panel.orderFrontRegardless()
@@ -174,6 +192,7 @@ final class WorkspaceSlide {
                 panel.orderOut(nil)
                 view.clear()
                 self.running = false
+                landed()
             })
         }
 
@@ -239,6 +258,26 @@ final class WorkspaceSlide {
         return result
     }
 
+    /// The workspaces flown past, in order: their saved previews where their
+    /// windows were (or would be laid out). No preview, no card.
+    private static func passingPages(_ numbers: [Int], rows: [OverviewRow], remembered: [Int: [CGWindowID: CGRect]],
+                                     like current: [CGWindowID: CGRect], screen: NSScreen) -> [[SlideCard]] {
+        let previews = PreviewStore.shared.images
+        return numbers.map { number in
+            let windows = (rows.first(where: { $0.number == number })?.windows ?? [])
+                .filter { previews[$0.id] != nil }
+            guard !windows.isEmpty else { return [] }
+            let frames = remembered[number]
+                ?? predictedFrames(windows, sizes: allFrames(windows, screen: screen), like: current, screen: screen)
+            return windows.compactMap { window in
+                guard let frame = frames[window.id],
+                      let image = previews[window.id]?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                else { return nil }
+                return SlideCard(frame: frame, image: image)
+            }
+        }
+    }
+
     // MARK: capturing
 
     private static func capture(display: SCDisplay, excluding: [SCRunningApplication], scale: CGFloat) async -> CGImage? {
@@ -278,11 +317,13 @@ struct SlideCard {
     let image: CGImage
 }
 
-/// Two screen-sized layers on a track that Core Animation moves.
+/// Screen-sized layers on a track that Core Animation moves: where you are,
+/// any workspaces passed on the way, where you're going.
 final class SlideView: NSView {
     private let track = CALayer()
     private let current = CALayer()
     private let target = CALayer()
+    private var passing: [CALayer] = []
     private var down = true
     private var done: () -> Void = {}
 
@@ -305,7 +346,8 @@ final class SlideView: NSView {
     /// drew every window mirrored top to bottom.
     override var isFlipped: Bool { true }
 
-    func prepare(snapshot: CGImage, wallpaper: CGImage?, cards: [SlideCard], down: Bool, scale: CGFloat) {
+    func prepare(snapshot: CGImage, wallpaper: CGImage?, passing pages: [[SlideCard]], cards: [SlideCard],
+                 down: Bool, scale: CGFloat) {
         self.down = down
         let size = bounds.size
         CATransaction.begin()
@@ -317,16 +359,34 @@ final class SlideView: NSView {
         current.contents = snapshot
         current.contentsScale = scale
 
-        target.frame = CGRect(x: 0, y: down ? size.height : -size.height, width: size.width, height: size.height)
-        target.sublayers?.forEach { $0.removeFromSuperlayer() }
-        target.masksToBounds = true
+        // the n-th screen away from where you are
+        func frame(_ n: Int) -> CGRect {
+            CGRect(x: 0, y: CGFloat(n) * (down ? size.height : -size.height), width: size.width, height: size.height)
+        }
+        passing.forEach { $0.removeFromSuperlayer() }
+        passing = pages.enumerated().map { index, cards in
+            let page = CALayer()
+            page.frame = frame(index + 1)
+            fill(page, wallpaper: wallpaper, cards: cards, scale: scale)
+            track.addSublayer(page)
+            return page
+        }
+        target.frame = frame(pages.count + 1)
+        fill(target, wallpaper: wallpaper, cards: cards, scale: scale)
+        CATransaction.commit()
+    }
+
+    /// One workspace's picture: the wallpaper with its windows on top.
+    private func fill(_ page: CALayer, wallpaper: CGImage?, cards: [SlideCard], scale: CGFloat) {
+        page.sublayers?.forEach { $0.removeFromSuperlayer() }
+        page.masksToBounds = true
         let backdrop = CALayer()
-        backdrop.frame = target.bounds
+        backdrop.frame = page.bounds
         backdrop.backgroundColor = NSColor.black.cgColor
         backdrop.contents = wallpaper
         backdrop.contentsGravity = .resizeAspectFill
         backdrop.masksToBounds = true
-        target.addSublayer(backdrop)
+        page.addSublayer(backdrop)
         for card in cards {
             let layer = CALayer()
             layer.frame = card.frame
@@ -335,14 +395,14 @@ final class SlideView: NSView {
             layer.cornerRadius = Theme.windowCorner
             layer.cornerCurve = .continuous
             layer.masksToBounds = true
-            target.addSublayer(layer)
+            page.addSublayer(layer)
         }
-        CATransaction.commit()
     }
 
-    /// Moves the track one screen up (or down), in the render server.
+    /// Moves the track to the last screen, in the render server.
     func slide(completion: @escaping () -> Void) {
-        let height = bounds.height
+        let steps = passing.count + 1
+        let height = bounds.height * CGFloat(steps)
         let from = track.position.y
         let to = from + (down ? -height : height)
         CATransaction.begin()
@@ -350,7 +410,7 @@ final class SlideView: NSView {
         let animation = CABasicAnimation(keyPath: "position.y")
         animation.fromValue = from
         animation.toValue = to
-        animation.duration = WorkspaceSlide.duration
+        animation.duration = WorkspaceSlide.duration(steps: steps)
         animation.timingFunction = WorkspaceSlide.timing
         CATransaction.setDisableActions(true)
         track.position.y = to
@@ -364,6 +424,8 @@ final class SlideView: NSView {
         CATransaction.setDisableActions(true)
         current.contents = nil
         target.sublayers?.forEach { $0.removeFromSuperlayer() }
+        passing.forEach { $0.removeFromSuperlayer() }
+        passing = []
         track.removeAllAnimations()
         track.position.y = bounds.height / 2
         CATransaction.commit()

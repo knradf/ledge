@@ -156,6 +156,7 @@ final class TrackpadSwipes {
 
     private func fire(up: Bool) {
         fired = true
+        NSLog("Ledge: three-finger swipe \(up ? "up" : "down")")
         DispatchQueue.main.async { self.onSwipe(up) }
     }
 }

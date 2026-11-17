@@ -78,7 +78,7 @@ final class PaneruStore: ObservableObject {
 
     /// Main thread. Switches workspace, with Ledge's slide when it's on and
     /// can (it switches Paneru behind it), then runs `then` once Paneru has
-    /// switched.
+    /// switched and the slide has landed.
     private func switchTo(_ workspace: Int, then: (() -> Void)? = nil) {
         guard let binary else { return }
         let switching: (@escaping () -> Void) -> Void = { done in
@@ -89,14 +89,12 @@ final class PaneruStore: ObservableObject {
                 DispatchQueue.main.async(execute: done)
             }
         }
-        let wrapped: (@escaping () -> Void) -> Void = { done in
-            switching {
-                done()
-                then?()
-            }
+        // `then` (focusing a window) waits for the slide to land: Paneru's
+        // scroll to that window then plays on screen, not under the slide
+        if WorkspaceSlide.shared.slide(to: workspace, rows: rows, switching: switching, landed: { then?() }) {
+            return
         }
-        if WorkspaceSlide.shared.slide(to: workspace, rows: rows, switching: wrapped) { return }
-        wrapped {}
+        switching { then?() }
     }
 
     /// Focuses the app's window in that workspace, not just the app: an app
@@ -136,6 +134,7 @@ final class PaneruStore: ObservableObject {
         guard let current = all.first(where: { $0.active })?.number else { return }
         let target = above ? current - 1 : current + 1
         guard all.contains(where: { $0.number == target }) else { return }
+        NSLog("Ledge: swipe asks for workspace \(target) (from \(current))")
         go(to: target)
     }
 
@@ -567,6 +566,10 @@ final class PaneruStore: ObservableObject {
             // them) instead of blanking the bar. The rules engine still gets
             // the empty snapshot, so it starts over when Paneru is back.
             if isConnected || self.binary == nil {
+                let was = self.workspaces.first(where: { $0.active })?.number
+                if let now = next.first(where: { $0.active })?.number, was != nil, now != was {
+                    NSLog("Ledge: workspace \(now) is active (was \(was!))")
+                }
                 if self.workspaces != next { self.workspaces = next }
                 if self.rows != nextRows { self.rows = nextRows }
             }
