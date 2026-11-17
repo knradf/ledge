@@ -16,6 +16,7 @@
   speed and glide, window movement
 - Window rules: apps that open on a given workspace
 - Three-finger up/down swipes with a configurable direction, and an experimental workspace slide
+  (jumping several workspaces slides through the ones in between)
 - Welcome on first launch: Paneru, room for the bar, trackpad gesture conflicts, permissions,
   media-control, open at login
 - Needs macOS 26 or later
