@@ -29,8 +29,12 @@ final class PaneruSettings: ObservableObject {
 
     // layout
     @Published private(set) var padding = EdgePadding()
+    /// Paneru's [options] menubar_height; nil is its auto value
+    @Published private(set) var menubarHeight: Int?
     /// what you see between two windows: twice Paneru's per-window padding
     @Published private(set) var gap = 8
+    /// each window's own top and bottom inset ([windows.all] vertical_padding)
+    @Published private(set) var windowInset = 4
     @Published private(set) var columnWidths: [Double] = [0.33, 0.5, 0.66, 1.0]
     @Published private(set) var resizeCycle = true
 
@@ -102,7 +106,9 @@ final class PaneruSettings: ObservableObject {
         update(\.pageDistance, raw("page_distance_cm", Self.gesture).flatMap(Double.init) ?? 2)
         update(\.padding, EdgePadding(top: int("top", Self.paddingSection), bottom: int("bottom", Self.paddingSection),
                                       left: int("left", Self.paddingSection), right: int("right", Self.paddingSection)))
+        update(\.menubarHeight, raw("menubar_height", Self.options).flatMap { Int($0) })
         update(\.gap, int("horizontal_padding", Self.gapSection) * 2)
+        update(\.windowInset, int("vertical_padding", Self.gapSection))
         if let widths = raw("preset_column_widths", Self.options).map(Self.parseList), !widths.isEmpty {
             update(\.columnWidths, widths)
         }
@@ -170,7 +176,6 @@ final class PaneruSettings: ObservableObject {
         default: key = "right"
         }
         write(key, in: Self.paddingSection, String(value))
-        if side == \EdgePadding.left { followBarIfOn() }
     }
 
     func setGap(_ value: Int) {
@@ -181,6 +186,8 @@ final class PaneruSettings: ObservableObject {
         }
         write("horizontal_padding", in: Self.gapSection, String(value / 2))
         write("vertical_padding", in: Self.gapSection, String(value / 2))
+        windowInset = value / 2
+        followBarIfOn()
     }
 
     func toggleWidth(_ width: Double) {
@@ -223,10 +230,11 @@ final class PaneruSettings: ObservableObject {
 
     // MARK: the top padding follows Ledge's bar
 
-    /// Windows start below the bar with the same space as at the screen's
-    /// sides (edge padding plus the window's own inset).
+    /// The bar sits exactly halfway between the screen's top edge and the
+    /// windows: the space below it matches the space above it. Paneru adds
+    /// each window's own inset on top of the padding, so that comes off.
     func topForBar(topOffset: Double = LedgeSettings.shared.topOffset) -> Int {
-        Int((topOffset + Double(BarMetrics.pillHeight)).rounded()) + padding.left
+        max(0, Int((topOffset * 2 + Double(BarMetrics.pillHeight)).rounded()) - windowInset)
     }
 
     func followBarIfOn() {
@@ -238,6 +246,14 @@ final class PaneruSettings: ObservableObject {
         guard editable else { return }
         let top = topForBar(topOffset: topOffset)
         if padding.top != top { setPadding(\.top, top) }
+        // The bar starts at the screen's top edge (the macOS menu bar hides),
+        // so the padding already covers it. Paneru's automatic menu bar height
+        // is ~30 pt even while the menu bar hides, and it adds that on top.
+        // A notch still counts: Paneru keeps the larger of the two.
+        if menubarHeight != 0 {
+            menubarHeight = 0
+            write("menubar_height", in: Self.options, "0")
+        }
     }
 
     // MARK: writing

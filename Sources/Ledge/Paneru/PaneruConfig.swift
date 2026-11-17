@@ -87,6 +87,49 @@ enum PaneruConfig {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: Paneru's first launch
+
+    /// On its first launch Paneru writes an init.lua that's only comments, and
+    /// any init.lua switches paneru.toml off: Ledge can't change a thing and
+    /// three-finger swipes stay off (they need fingers_count). Swaps that
+    /// stub for a paneru.toml. Paneru picks its config file at launch, so
+    /// true means it needs a restart.
+    static func replaceLuaStub(ledgeSwipesVertically: Bool) -> Bool {
+        let files = FileManager.default
+        let home = files.homeDirectoryForCurrentUser
+        let lua = url.deletingLastPathComponent().appendingPathComponent("init.lua")
+        let others = [url, home.appendingPathComponent(".paneru.toml"), home.appendingPathComponent(".paneru"),
+                      home.appendingPathComponent(".paneru.lua")]
+        guard !others.contains(where: { files.fileExists(atPath: $0.path) }),
+              let script = try? String(contentsOf: lua, encoding: .utf8),
+              script.components(separatedBy: "\n").allSatisfy({ line in
+                  let trimmed = line.trimmingCharacters(in: .whitespaces)
+                  return trimmed.isEmpty || trimmed.hasPrefix("--")
+              })
+        else { return false }
+        // Paneru's own default file, plus the swipes Ledge expects
+        let toml = """
+        # Paneru configuration
+
+        [options]
+
+        [bindings]
+
+        [swipe.gesture]
+        fingers_count = 3
+        vertical = \(ledgeSwipesVertically ? "false" : "true")
+
+        """
+        do {
+            try toml.write(to: url, atomically: true, encoding: .utf8)
+            try files.removeItem(at: lua)
+            return true
+        } catch {
+            NSLog("Ledge: couldn't replace Paneru's init.lua: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// "key = value  # comment" -> value
     private static func assignment(_ key: String, in line: String) -> String? {
         let code = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""

@@ -426,7 +426,7 @@ struct PaneruTab: View {
         Section {
             Toggle(isOn: $settings.paneruTopFollowsBar) {
                 Text("Leave room for Ledge's bar")
-                Text("Windows start \(config.topForBar()) pt from the top: below the bar, with the same space as at the sides. It follows the bar when you change it.")
+                Text("Windows start \(config.topForBar()) pt from the top: the same space below the bar as above it. It follows the bar when you change it.")
             }
             if !settings.paneruTopFollowsBar {
                 SliderRow(title: "Top", value: padding(\.top), range: 0...80)

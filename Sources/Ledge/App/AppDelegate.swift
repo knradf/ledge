@@ -105,6 +105,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startOverview() {
         OverviewController.shared.watch(paneru)
         WorkspaceSlide.shared.watch(paneru)
+        if !paneru.appsOnly,
+           PaneruConfig.replaceLuaStub(ledgeSwipesVertically: LedgeSettings.shared.desktopSwipe != .off) {
+            NSLog("Ledge: replaced Paneru's empty init.lua with paneru.toml, restarting Paneru")
+            PaneruSettings.shared.reload()
+            paneru.restartPaneru()
+        }
         // keeps Paneru's top padding just below the bar
         // before the bar padding: an install from before the welcome keeps its setting
         Onboarding.shared.showIfNeeded(paneru: paneru)
