@@ -40,13 +40,20 @@ enum PaneruConfig {
     /// Several lines in one save, so Paneru reloads once.
     @discardableResult
     static func set(_ changes: [(key: String, section: String, value: String)]) -> Bool {
+        edit(changes.map { (key: $0.key, section: $0.section, value: Optional($0.value)) })
+    }
+
+    /// Like set, but a nil value takes the line out.
+    @discardableResult
+    static func edit(_ changes: [(key: String, section: String, value: String?)]) -> Bool {
         guard !changes.isEmpty, let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
         let backup = url.appendingPathExtension("ledge-backup")
         if !FileManager.default.fileExists(atPath: backup.path) {
             try? text.write(to: backup, atomically: true, encoding: .utf8)
         }
         let updated = changes.reduce(text) { text, change in
-            setting(change.key, in: change.section, to: change.value, text: text)
+            guard let value = change.value else { return removing(change.key, in: change.section, text: text) }
+            return setting(change.key, in: change.section, to: value, text: text)
         }
         guard updated != text else { return true }
         do {
@@ -69,10 +76,16 @@ enum PaneruConfig {
                 if current == section { headerIndex = i }
                 continue
             }
-            if current == section, assignment(key, in: trimmed) != nil {
-                let indent = String(line.prefix { $0 == " " || $0 == "\t" })
-                let comment = line.range(of: "#").map { "   " + String(line[$0.lowerBound...]) } ?? ""
-                lines[i] = indent + key + " = " + value + comment
+            if current == section, assignment(key, in: trimmed) != nil, let equals = line.firstIndex(of: "=") {
+                // only the value changes: alignment and comments stay
+                let rest = line[line.index(after: equals)...]
+                var comment = ""
+                if let hash = rest.firstIndex(of: "#") {
+                    let old = rest[..<hash]
+                    let spacing = old.reversed().prefix { $0 == " " || $0 == "\t" }
+                    comment = (spacing.isEmpty ? " " : String(spacing)) + String(rest[hash...])
+                }
+                lines[i] = String(line[...equals]) + " " + value + comment
                 return lines.joined(separator: "\n")
             }
         }
@@ -85,6 +98,73 @@ enum PaneruConfig {
             lines.append("")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The text without that one line.
+    static func removing(_ key: String, in section: String, text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        var current = ""
+        for (i, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                current = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+                continue
+            }
+            if current == section, assignment(key, in: trimmed) != nil {
+                lines.remove(at: i)
+                break
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Every "key = value" line in a [section], in file order.
+    static func entries(in section: String, text: String) -> [(key: String, value: String)] {
+        var current = ""
+        var found: [(key: String, value: String)] = []
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                current = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+                continue
+            }
+            guard current == section, !trimmed.hasPrefix("#"),
+                  let key = trimmed.split(separator: "=", maxSplits: 1).first?.trimmingCharacters(in: .whitespaces),
+                  !key.isEmpty, let value = assignment(key, in: trimmed)
+            else { continue }
+            found.append((key, value))
+        }
+        return found
+    }
+
+    // MARK: Ledge's own windows
+
+    /// Paneru only manages apps with a Dock icon, and Ledge has one only
+    /// while Settings is open: Paneru doesn't reliably notice that. These
+    /// rules make it manage Ledge (it then tiles Settings) and keep the
+    /// welcome floating. The bar and the overview are panels Paneru ignores.
+    /// Paneru reads them when an app launches, so they apply from Ledge's
+    /// next start.
+    static let settingsRule = "windows.ledge_settings"
+    static let welcomeRule = "windows.ledge_welcome"
+    static let welcomeTitle = "Welcome to Ledge"
+
+    static func addLedgeRules() {
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              value("bundle_id", in: settingsRule, text: text) == nil
+                || value("bundle_id", in: welcomeRule, text: text) == nil
+        else { return }
+        let id = "\"" + (Bundle.main.bundleIdentifier ?? "io.github.knradf.ledge") + "\""
+        NSLog("Ledge: adding window rules for Ledge to paneru.toml")
+        // keys go in right after the header, so in reverse
+        set([
+            (key: "manage", section: settingsRule, value: "true"),
+            (key: "bundle_id", section: settingsRule, value: id),
+            (key: "title", section: settingsRule, value: "\"^Ledge$\""),
+            (key: "floating", section: welcomeRule, value: "true"),
+            (key: "bundle_id", section: welcomeRule, value: id),
+            (key: "title", section: welcomeRule, value: "\"^" + welcomeTitle + "$\""),
+        ])
     }
 
     // MARK: Paneru's first launch
@@ -107,17 +187,27 @@ enum PaneruConfig {
                   return trimmed.isEmpty || trimmed.hasPrefix("--")
               })
         else { return false }
-        // Paneru's own default file, plus the swipes Ledge expects
+        // Paneru's own default file, plus the swipes Ledge expects and
+        // column widths that stay on screen
         let toml = """
         # Paneru configuration
 
         [options]
+        preset_column_widths = [0.33, 0.5, 0.66, 1]
 
         [bindings]
+        \(PaneruShortcuts.defaultLines(superKey: .leftOption).joined(separator: "\n"))
+
+        [swipe]
+        continuous = false
 
         [swipe.gesture]
         fingers_count = 3
         vertical = \(ledgeSwipesVertically ? "false" : "true")
+
+        [swipe.scroll]
+        modifier = "lalt"                # left Option + scroll wheel slides the strip
+        vertical_modifier = "shift"      # left Option + Shift + scroll wheel switches workspaces
 
         """
         do {

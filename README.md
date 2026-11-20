@@ -1,21 +1,27 @@
-# Ledge
+<p align="center"><img src="Resources/AppIcon.png" width="128" alt="Ledge icon"></p>
 
-A desktop shell for macOS, built to sit on top of the [Paneru](https://github.com/karinushka/paneru)
-tiling window manager. It's meant to be easy to use and configure. It also features the ability to configure Paneru through a simple GUI. It includes a status/taskbar area, a niri-style workspace overview, and a clock that opens into an
-island with your calendar and what's playing.
+<h1 align="center">Ledge</h1>
+
+<p align="center">
+A desktop shell for macOS, built on top of the <a href="https://github.com/karinushka/paneru">Paneru</a>
+tiling window manager. A status bar, a niri-style workspace overview, and a clock that opens into an
+island with your calendar and what's playing. Plus all of Paneru's settings and shortcuts in a simple GUI.
+</p>
+
+https://github.com/user-attachments/assets/328a74a1-eed5-494d-af5e-2b14f527d811
 
 > **Status: alpha.** I use it every day, but only on one machine: an M1 MacBook Air on macOS 27, one
 > display. Intel Macs and multiple displays are untested. Issues welcome.
 
-**How it was made:** I'm a product designer, so I knew where I wanted to take this, but the
-code was written by Claude.  If
+**How it was made:** The code was written by Claude.  If
 something works or looks off to you, it might well be: please open an issue.
 
 ## What it does
 
 **The bar**
 - Paneru's workspaces as pills: plain, with numbers, or with the apps on them (real icons or
-  [sketchybar-app-font](https://github.com/kvndrsslr/sketchybar-app-font) glyphs, built in)
+  [sketchybar-app-font](https://github.com/kvndrsslr/sketchybar-app-font) glyphs, built in).
+  Scroll over them to switch workspaces
 - Right side (status bar), in any order and split into pills where you like: Wi-Fi, network speed, Bluetooth,
   sound (menu with volume and output; right-click mutes, scroll changes volume), battery (drawn like
   macOS 26+ does), keyboard layout, AirDrop, Siri
@@ -26,7 +32,7 @@ something works or looks off to you, it might well be: please open an issue.
 - Hides on displays where something is full screen
 - Without Paneru it still works: the area normally taken up by workspaces shows your open apps
 
-**The overview** (left Option + O, or a hot corner)
+**The overview** (Super + O, or a hot corner)
 - All workspaces stacked like niri, with live window previews, the current one in the middle
 - Click a window to focus it, a desktop to switch to it; scroll, arrow keys, Return, 1 to 9, Esc
 - Drag windows between workspaces or along a workspace to reorder them; the others make room and an
@@ -44,6 +50,8 @@ something works or looks off to you, it might well be: please open an issue.
   presets, focus follows mouse, mouse follows focus
 - How the sideways swipe behaves (free scroll, glide and settle, one window at a time), its speed
   and glide, and how fast windows move
+- All of Paneru's keyboard shortcuts (Settings → Shortcuts), around one Super key you pick.
+  Paneru ships with none, so Ledge brings niri's
 - Ledge edits `~/.config/paneru/paneru.toml` one line at a time, keeps your comments and saves a
   backup the first time. If you configure Paneru with `init.lua`, Ledge only shows the values
 
@@ -79,17 +87,17 @@ bash make-cert.sh   # once: a local signing certificate, so permissions survive 
 bash install.sh
 ```
 
-`install.sh` builds Ledge, copies it to `~/Applications`, starts it now and at every login, and stops
+`install.sh` builds Ledge, copies it to `/Applications`, starts it now and at every login, and stops
 SketchyBar if it's running. After changing anything, `bash restart.sh` rebuilds and restarts it.
 `bash uninstall.sh` removes it (and starts SketchyBar again if the installer had stopped it).
 
-Settings: click the clock, then Ledge Settings at the bottom of the island.
+Settings: click the clock, then Ledge Settings at the bottom of the island, or just open Ledge again.
 
 ## Permissions
 
 The welcome explains each one before macOS asks, and you can skip any of them. They're all in
 Settings → Permissions later.
-- **Accessibility:** focusing and moving windows from the bar and the overview, the Option + O
+- **Accessibility:** focusing and moving windows from the bar and the overview, the overview
   shortcut, three-finger swipes
 - **Screen Recording:** window previews in the overview, the workspace slide, matching the wallpaper
 - **Calendars:** the island's calendar
@@ -116,7 +124,7 @@ Because of these, Ledge can't be on the App Store.
 
 ## When something's off
 
-- Log: `cat /tmp/ledge.log`, or live: `log stream --predicate 'process == "Ledge"'`
+- Log: `cat /tmp/ledge_$(id -u).log` (one per user), or live: `log stream --predicate 'process == "Ledge"'`
 - Workspaces empty: check that `paneru query state --json` answers
 - Paneru's sideways swipe stops working: that's Paneru
   ([#480](https://github.com/karinushka/paneru/issues/480)); restart it with

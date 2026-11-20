@@ -44,10 +44,15 @@ final class Onboarding: NSObject, NSWindowDelegate {
         self.model = model
         let saved = UserDefaults.standard.string(forKey: Self.stepKey).flatMap(OnboardingStep.init)
         model.step = resume ? (saved ?? .welcome) : .welcome
+        // Settings makes Ledge a regular app, and Paneru tiles a regular
+        // app's windows: the welcome stays a floating window
+        SettingsWindowController.shared.close()
         if window == nil {
             let host = NSHostingController(rootView: OnboardingView(model: model) { [weak self] in self?.finish() })
             let window = NSWindow(contentViewController: host)
             window.styleMask = [.titled, .closable, .fullSizeContentView]
+            // hidden, but Paneru's rule for keeping it floating matches it
+            window.title = PaneruConfig.welcomeTitle
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.setContentSize(OnboardingView.size)
@@ -501,7 +506,7 @@ struct BarRoomPage: View {
     var body: some View {
         OnboardingPage(
             symbol: "rectangle.topthird.inset.filled", tint: .teal,
-            title: "Room for the Bar",
+            title: "Room for the bar",
             text: "Paneru can keep windows below Ledge's bar, so the bar never covers them. Ledge then sets Paneru's top padding and keeps it matched when you move the bar."
         ) {
             OnboardingForm {
@@ -526,7 +531,7 @@ struct GesturesPage: View {
     var body: some View {
         OnboardingPage(
             symbol: "hand.draw", tint: .orange,
-            title: "Trackpad Gestures",
+            title: "Trackpad gestures",
             text: "Paneru moves between windows with a sideways swipe, and Ledge or Paneru switch workspaces with an up or down swipe. macOS takes a gesture first when one of its own uses the same number of fingers."
         ) {
             OnboardingForm {
@@ -558,7 +563,7 @@ struct AccessibilityPage: View {
         OnboardingPage(
             symbol: "accessibility", tint: .blue,
             title: "Accessibility",
-            text: "Lets Ledge bring a window forward when you click it in the bar or the overview, and listen for Left Option + O and three-finger swipes. Ledge never reads what you type."
+            text: "Lets Ledge bring a window forward when you click it in the bar or the overview, and listen for the overview shortcut and three-finger swipes. Ledge never reads what you type."
         ) {
             OnboardingForm {
                 Section {
@@ -637,7 +642,7 @@ struct TrackInfoPage: View {
     var body: some View {
         OnboardingPage(
             symbol: "music.note", tint: .pink,
-            title: "Track Info",
+            title: "Track info",
             text: "The island can show what's playing, with artwork and controls. macOS no longer lets apps read that, so it takes media-control, a small free tool. Optional: without it the island still says which app is playing."
         ) {
             OnboardingForm {
@@ -653,7 +658,7 @@ struct LoginPage: View {
     var body: some View {
         OnboardingPage(
             symbol: "power", tint: .green,
-            title: "Open at Login",
+            title: "Open at login",
             text: "Have Ledge ready every time you log in."
         ) {
             OnboardingForm {
@@ -681,7 +686,7 @@ struct DonePage: View {
     var body: some View {
         OnboardingPage(
             symbol: "checkmark", tint: .green,
-            title: "You're Set",
+            title: "You're set",
             text: "Click the clock for the island; Ledge Settings is at the bottom of it. Everything here is in Settings too, and Settings → Permissions can show this welcome again."
         ) {
             EmptyView()

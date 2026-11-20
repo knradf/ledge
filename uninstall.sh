@@ -5,7 +5,7 @@ MARKER="$HOME/Library/Application Support/Ledge/stopped-sketchybar"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 pkill -x Ledge 2>/dev/null || true
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
-rm -rf "$HOME/Applications/Ledge.app"
+rm -rf /Applications/Ledge.app "$HOME/Applications/Ledge.app"
 if [ -f "$MARKER" ] && command -v brew >/dev/null 2>&1; then
   brew services start sketchybar
   echo "SketchyBar is back on"

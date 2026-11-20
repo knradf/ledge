@@ -7,3 +7,8 @@ build/
 CLAUDE.md
 .claude/
 notes/
+# Icon Composer exports; only AppIcon.png is used
+Resources/ledge-icon Exports/
+
+# Demo recordings (uploaded to GitHub, not committed)
+Resources/ledge-recording.*

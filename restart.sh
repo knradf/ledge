@@ -16,9 +16,19 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
-mkdir -p "$HOME/Applications"
-rm -rf "$HOME/Applications/Ledge.app"
-cp -R build/Ledge.app "$HOME/Applications/Ledge.app"
+APP="/Applications/Ledge.app"
+rm -rf "$APP"
+cp -R build/Ledge.app "$APP"
+# older installs went to ~/Applications and logged to /tmp/ledge.log: move
+# the LaunchAgent over
+if [ "$(/usr/libexec/PlistBuddy -c 'Print Program' "$PLIST" 2>/dev/null)" != "$APP/Contents/MacOS/Ledge" ]; then
+  /usr/libexec/PlistBuddy -c "Set Program $APP/Contents/MacOS/Ledge" "$PLIST"
+  rm -rf "$HOME/Applications/Ledge.app"
+fi
+LOG="/tmp/ledge_$(id -u).log"
+if [ "$(/usr/libexec/PlistBuddy -c 'Print StandardErrorPath' "$PLIST" 2>/dev/null)" != "$LOG" ]; then
+  /usr/libexec/PlistBuddy -c "Set StandardErrorPath $LOG" "$PLIST"
+fi
 
 if ! launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; then
   # still registered after all: just restart it in place

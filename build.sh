@@ -20,6 +20,16 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 mkdir -p "$APP/Contents/Resources/Fonts"
 cp Resources/Glyphs/sketchybar-app-font.ttf "$APP/Contents/Resources/Fonts/"
 cp Resources/Glyphs/icon_map.json Resources/Glyphs/LICENSE Resources/Glyphs/VERSION "$APP/Contents/Resources/"
+# The app icon: AppIcon.png is the Icon Composer export (ledge-icon.icon) at
+# macOS size. The .icon itself needs Xcode's actool to compile.
+ICONSET="build/AppIcon.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+  sips -z $size $size Resources/AppIcon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  sips -z $((size * 2)) $((size * 2)) Resources/AppIcon.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 # Sign with the local certificate if make-cert.sh created one: macOS ties
 # permissions to the signature, so they then survive rebuilds.
 if security find-certificate -c "Ledge Local" >/dev/null 2>&1; then

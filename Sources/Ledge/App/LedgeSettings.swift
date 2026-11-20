@@ -185,8 +185,8 @@ final class LedgeSettings: ObservableObject {
         "appStyle": AppStyle.glyphs.rawValue,
         "showWindowCount": true,
         "workspaceSlide": false,
-        // new installs choose in the welcome
-        "paneruTopFollowsBar": false,
+        // the welcome asks too
+        "paneruTopFollowsBar": true,
         "networkThresholdKB": 10.0,
         "clock24h": true,
         "clockShowDate": false,
@@ -194,7 +194,7 @@ final class LedgeSettings: ObservableObject {
         "clockPosition": ClockPosition.center.rawValue,
         "soundShowPercent": true,
         "batteryShowPercent": true,
-        "overviewShortcut": true,
+        "overviewKey": "lalt - o",
         "hotCorner": "topLeft",
         "overviewReverseScroll": false,
         "overviewZoom": 0.42,
@@ -237,7 +237,8 @@ final class LedgeSettings: ObservableObject {
     @Published var batteryShowPercent: Bool { didSet { store.set(batteryShowPercent, forKey: "batteryShowPercent") } }
 
     // overview
-    @Published var overviewShortcut: Bool { didSet { store.set(overviewShortcut, forKey: "overviewShortcut") } }
+    /// opens the overview, as Paneru spells shortcuts ("lalt - o"); empty is off
+    @Published var overviewKey: String { didSet { store.set(overviewKey, forKey: "overviewKey") } }
     @Published var hotCorner: HotCornerPosition { didSet { store.set(hotCorner.rawValue, forKey: "hotCorner") } }
     /// off: scrolling moves the stack like a page (follows the system's direction)
     @Published var overviewReverseScroll: Bool { didSet { store.set(overviewReverseScroll, forKey: "overviewReverseScroll") } }
@@ -291,7 +292,12 @@ final class LedgeSettings: ObservableObject {
         networkThresholdKB = store.double(forKey: "networkThresholdKB")
         soundShowPercent = store.bool(forKey: "soundShowPercent")
         batteryShowPercent = store.bool(forKey: "batteryShowPercent")
-        overviewShortcut = store.bool(forKey: "overviewShortcut")
+        // older versions had an on/off Left Option + O
+        if store.object(forKey: "overviewKey") == nil, store.object(forKey: "overviewShortcut") != nil,
+           !store.bool(forKey: "overviewShortcut") {
+            store.set("", forKey: "overviewKey")
+        }
+        overviewKey = store.string(forKey: "overviewKey") ?? "lalt - o"
         hotCorner = HotCornerPosition(rawValue: store.string(forKey: "hotCorner") ?? "") ?? .topLeft
         overviewReverseScroll = store.bool(forKey: "overviewReverseScroll")
         overviewZoom = store.double(forKey: "overviewZoom")
@@ -371,12 +377,12 @@ final class LedgeSettings: ObservableObject {
         appStyle = .glyphs
         showWindowCount = true
         workspaceSlide = false
-        paneruTopFollowsBar = false
+        paneruTopFollowsBar = true
         resetStatusItems()
         networkThresholdKB = 10
         soundShowPercent = true
         batteryShowPercent = true
-        overviewShortcut = true
+        overviewKey = (store.string(forKey: "shortcutSuper") ?? SuperKey.leftOption.rawValue) + " - o"
         hotCorner = .topLeft
         overviewReverseScroll = false
         overviewZoom = 0.42

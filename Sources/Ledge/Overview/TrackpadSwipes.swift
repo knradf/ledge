@@ -35,6 +35,8 @@ final class TrackpadSwipes {
     private var startTime: Double = 0
     private var lastTime: Double = 0
     private var loggedFirstEvent = false
+    /// the fingers the swipe started with
+    private var trackedIDs: UInt64 = 0
 
     static let fingers = 3
     /// how far fingers move before the swipe decides if it's up/down or sideways
@@ -92,9 +94,29 @@ final class TrackpadSwipes {
 
     /// Called on MultitouchSupport's thread with every frame of contacts.
     fileprivate func frame(_ data: UnsafeMutableRawPointer?, count: Int, time: Double) {
-        // the common case (one or two fingers moving the pointer or scrolling)
-        // costs one comparison
-        guard count == Self.fingers, let data else {
+        // Only touches that are really down count. A hand or a cable near the
+        // trackpad shows up as contacts hovering or coming and going, and
+        // their average position jumps like a quick flick.
+        var touching = 0
+        var ids: UInt64 = 0
+        var sumX: Float = 0
+        var sumY: Float = 0
+        if let data {
+            for i in 0..<count {
+                let finger = data.advanced(by: i * MultitouchAPI.fingerStride)
+                let state = finger.load(fromByteOffset: MultitouchAPI.stateOffset, as: Int32.self)
+                guard MultitouchAPI.touchingStates.contains(state) else { continue }
+                touching += 1
+                ids |= 1 << UInt64(finger.load(fromByteOffset: MultitouchAPI.idOffset, as: Int32.self) & 63)
+                sumX += finger.load(fromByteOffset: MultitouchAPI.positionOffset, as: Float.self)
+                sumY += finger.load(fromByteOffset: MultitouchAPI.positionOffset + 4, as: Float.self)
+            }
+        }
+        // a different set of fingers is a new gesture, not movement
+        if tracking, touching == Self.fingers, ids != trackedIDs {
+            tracking = false
+        }
+        guard touching == Self.fingers, let data else {
             if tracking {
                 finish()
                 ThreeFingerScrollGate.shared.fingersDown = false
@@ -105,16 +127,8 @@ final class TrackpadSwipes {
             loggedFirstEvent = true
             NSLog("Ledge: three-finger touches are coming through")
         }
-
-        var sumX: Float = 0
-        var sumY: Float = 0
-        for i in 0..<count {
-            let finger = data.advanced(by: i * MultitouchAPI.fingerStride)
-            sumX += finger.load(fromByteOffset: MultitouchAPI.positionOffset, as: Float.self)
-            sumY += finger.load(fromByteOffset: MultitouchAPI.positionOffset + 4, as: Float.self)
-        }
-        let x = sumX / Float(count)
-        let y = sumY / Float(count)
+        let x = sumX / Float(touching)
+        let y = sumY / Float(touching)
 
         if !tracking {
             ThreeFingerScrollGate.shared.fingersDown = true
@@ -127,6 +141,7 @@ final class TrackpadSwipes {
             lastDY = 0
             startTime = time
             lastTime = time
+            trackedIDs = ids
             return
         }
         // one switch per swipe; sideways swipes belong to Paneru
@@ -272,6 +287,10 @@ private struct MultitouchAPI {
     /// state, finger and hand ids, then the normalized position (x, y in 0...1).
     static let fingerStride = 96
     static let positionOffset = 32
+    static let idOffset = 16
+    static let stateOffset = 20
+    /// 3 = touching down, 4 = touching (1-2 are hovering, 5-7 lifting off)
+    static let touchingStates: ClosedRange<Int32> = 3...4
 
     static let shared: MultitouchAPI? = {
         let path = "/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport"

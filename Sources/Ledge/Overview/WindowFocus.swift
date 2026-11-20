@@ -8,7 +8,7 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMut
 
 /// Focusing one specific window, and the permissions the overview needs.
 enum WindowFocus {
-    /// Accessibility permission (focus a specific window, the ⌥O shortcut)
+    /// Accessibility permission (focus a specific window, the overview shortcut)
     static var trusted: Bool { AXIsProcessTrusted() }
 
     static func requestTrust() {

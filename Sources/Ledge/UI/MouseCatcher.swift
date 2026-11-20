@@ -8,6 +8,10 @@ struct MouseCatcher: NSViewRepresentable {
     var onRight: () -> Void = {}
     /// +1 = up / louder, -1 = down / quieter, regardless of natural scrolling
     var onScroll: (Int) -> Void = { _ in }
+    /// a trackpad swipe counts once, not once per bit of distance
+    var onePerGesture = false
+    /// only takes scroll-wheel events: clicks reach the views underneath
+    var scrollOnly = false
     /// a click opens this menu right under the view, like a menu bar item
     var menu: (() -> NSMenu)? = nil
     /// true while pressed or while its menu is open, for the highlight
@@ -30,6 +34,13 @@ struct MouseCatcher: NSViewRepresentable {
     final class CatcherView: NSView {
         var owner: MouseCatcher?
         private var accumulated: CGFloat = 0
+
+        private var gestureStepped = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            if owner?.scrollOnly == true, NSApp.currentEvent?.type != .scrollWheel { return nil }
+            return super.hitTest(point)
+        }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -60,17 +71,36 @@ struct MouseCatcher: NSViewRepresentable {
         }
 
         override func scrollWheel(with event: NSEvent) {
+            guard let owner else { return }
+            // a flick's coasting would keep going after the fingers are off
+            guard event.momentumPhase.isEmpty else { return }
             var dy = event.scrollingDeltaY
             if event.isDirectionInvertedFromDevice { dy = -dy }
-            // trackpads send lots of tiny deltas, wheels send whole notches
-            accumulated += event.hasPreciseScrollingDeltas ? dy / 12 : dy
+            guard event.hasPreciseScrollingDeltas else {
+                // A mouse wheel: one notch, one step. scrollingDeltaY has the
+                // system's acceleration in it, so a slow notch is a fraction
+                // of a line and a quick spin is many.
+                if dy != 0 { owner.onScroll(dy > 0 ? 1 : -1) }
+                return
+            }
+            if event.phase == .began {
+                accumulated = 0
+                gestureStepped = false
+            }
+            // trackpads send lots of tiny deltas
+            accumulated += dy / 12
             while abs(accumulated) >= 1 {
                 let step = accumulated > 0 ? 1 : -1
-                owner?.onScroll(step)
                 accumulated -= CGFloat(step)
+                if owner.onePerGesture {
+                    if gestureStepped { continue }
+                    gestureStepped = true
+                }
+                owner.onScroll(step)
             }
-            if event.phase == .ended || event.momentumPhase == .ended {
+            if event.phase == .ended || event.phase == .cancelled {
                 accumulated = 0
+                gestureStepped = false
             }
         }
     }

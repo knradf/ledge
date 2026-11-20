@@ -138,6 +138,24 @@ final class PaneruStore: ObservableObject {
         go(to: target)
     }
 
+    /// The mouse wheel over the workspaces: one notch, one workspace.
+    /// Notches before the last switch has landed are dropped, or a quick
+    /// spin would queue a slide per notch. A switch that never lands stops
+    /// blocking after a second.
+    func wheelStep(above: Bool) {
+        let active = workspaces.first(where: { $0.active })?.number
+        if let target = wheelTarget, active != target, Date().timeIntervalSince(wheelAsked) < 1 { return }
+        guard let current = active else { return }
+        let target = above ? current - 1 : current + 1
+        guard workspaces.withEmpty().contains(where: { $0.number == target }) else { return }
+        wheelTarget = target
+        wheelAsked = Date()
+        go(to: target)
+    }
+
+    private var wheelTarget: Int?
+    private var wheelAsked = Date.distantPast
+
     func refresh() {
         queue.async { self.scheduleRefresh() }
     }

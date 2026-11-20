@@ -20,6 +20,8 @@ final class PaneruSettings: ObservableObject {
     @Published private(set) var movement = WindowMovement.instant
     @Published private(set) var stripSwipe = StripSwipe.free
     @Published private(set) var haptics = true
+    /// Paneru's [swipe] continuous: the strip can slide into empty space (default on)
+    @Published private(set) var slidePastEnds = true
     /// Paneru's [swipe] sensitivity (0.1 to 2, default 0.35)
     @Published private(set) var swipeSpeed = 0.35
     /// Paneru's [swipe] deceleration (1 to 10, default 4): higher stops sooner
@@ -35,7 +37,9 @@ final class PaneruSettings: ObservableObject {
     @Published private(set) var gap = 8
     /// each window's own top and bottom inset ([windows.all] vertical_padding)
     @Published private(set) var windowInset = 4
-    @Published private(set) var columnWidths: [Double] = [0.33, 0.5, 0.66, 1.0]
+    /// Paneru's defaults when paneru.toml doesn't list any (they go past the screen on purpose)
+    static let paneruDefaultWidths: [Double] = [0.25, 0.33333, 0.5, 0.66667, 0.75, 1.0, 1.5, 2.0]
+    @Published private(set) var columnWidths: [Double] = PaneruSettings.paneruDefaultWidths
     @Published private(set) var resizeCycle = true
 
     // focus and mouse
@@ -52,8 +56,9 @@ final class PaneruSettings: ObservableObject {
     static let swipe = "swipe"
     static let options = "options"
     static let paddingSection = "padding"
-    /// Paneru's column width presets Ledge offers (fractions of the screen)
-    static let widthChoices: [Double] = [0.25, 0.33, 0.4, 0.5, 0.6, 0.66, 0.75, 1.0]
+    /// Paneru's column width presets Ledge offers (fractions of the screen),
+    /// Paneru's own defaults included so turning one off doesn't lose it
+    static let widthChoices: [Double] = [0.25, 0.33333, 0.4, 0.5, 0.6, 0.66667, 0.75, 1.0, 1.5, 2.0]
 
     private var pending: [String: (section: String, value: String)] = [:]
     private var writeWork: DispatchWorkItem?
@@ -101,6 +106,7 @@ final class PaneruSettings: ObservableObject {
         update(\.stripSwipe, StripSwipe(paging: bool("paging", Self.gesture, false),
                                         autoCenter: bool("auto_center", Self.options, false)))
         update(\.haptics, bool("haptics", Self.gesture, true))
+        update(\.slidePastEnds, bool("continuous", Self.swipe, true))
         update(\.swipeSpeed, raw("sensitivity", Self.swipe).flatMap(Double.init) ?? 0.35)
         update(\.swipeDeceleration, raw("deceleration", Self.swipe).flatMap(Double.init) ?? 4)
         update(\.pageDistance, raw("page_distance_cm", Self.gesture).flatMap(Double.init) ?? 2)
@@ -109,9 +115,8 @@ final class PaneruSettings: ObservableObject {
         update(\.menubarHeight, raw("menubar_height", Self.options).flatMap { Int($0) })
         update(\.gap, int("horizontal_padding", Self.gapSection) * 2)
         update(\.windowInset, int("vertical_padding", Self.gapSection))
-        if let widths = raw("preset_column_widths", Self.options).map(Self.parseList), !widths.isEmpty {
-            update(\.columnWidths, widths)
-        }
+        let widths = raw("preset_column_widths", Self.options).map(Self.parseList) ?? []
+        update(\.columnWidths, widths.isEmpty ? Self.paneruDefaultWidths : widths)
         update(\.resizeCycle, bool("window_resize_cycle", Self.options, true))
         update(\.focusFollowsMouse, bool("focus_follows_mouse", Self.options, false))
         update(\.mouseFollowsFocus, bool("mouse_follows_focus", Self.options, false))
@@ -151,6 +156,11 @@ final class PaneruSettings: ObservableObject {
         write("haptics", in: Self.gesture, on ? "true" : "false")
     }
 
+    func setSlidePastEnds(_ on: Bool) {
+        slidePastEnds = on
+        write("continuous", in: Self.swipe, on ? "true" : "false")
+    }
+
     func setSwipeSpeed(_ value: Double) {
         swipeSpeed = value
         write("sensitivity", in: Self.swipe, String(format: "%g", value))
@@ -178,7 +188,30 @@ final class PaneruSettings: ObservableObject {
         write(key, in: Self.paddingSection, String(value))
     }
 
+    /// What you see between a window and a screen edge: the edge padding plus
+    /// the window's own inset (horizontal_padding at the sides, vertical_padding
+    /// at the top and bottom). Ledge's edge sliders show this.
+    func visibleEdge(_ side: WritableKeyPath<EdgePadding, Int>) -> Int {
+        padding[keyPath: side] + inset(at: side)
+    }
+
+    /// The edge can't come closer than the window's own inset.
+    func setVisibleEdge(_ side: WritableKeyPath<EdgePadding, Int>, _ value: Int) {
+        let raw = max(0, value - inset(at: side))
+        if padding[keyPath: side] != raw { setPadding(side, raw) }
+    }
+
+    private func inset(at side: WritableKeyPath<EdgePadding, Int>) -> Int {
+        side == \EdgePadding.left || side == \EdgePadding.right ? gap / 2 : windowInset
+    }
+
+    /// Paneru gives each window its inset only when the window opens (paneru#488),
+    /// so windows already open keep their old spacing until Paneru restarts.
     func setGap(_ value: Int) {
+        // the screen edges stay where they look, the edge padding absorbs the inset
+        var sides: [WritableKeyPath<EdgePadding, Int>] = [\.left, \.right, \.bottom]
+        if !LedgeSettings.shared.paneruTopFollowsBar { sides.append(\.top) }
+        let edges = sides.map { visibleEdge($0) }
         gap = value
         // [windows.all] is a window rule, which needs a title pattern to match anything
         if PaneruConfig.value("title", in: Self.gapSection) == nil, pending["title"] == nil {
@@ -187,12 +220,13 @@ final class PaneruSettings: ObservableObject {
         write("horizontal_padding", in: Self.gapSection, String(value / 2))
         write("vertical_padding", in: Self.gapSection, String(value / 2))
         windowInset = value / 2
+        for (side, edge) in zip(sides, edges) { setVisibleEdge(side, edge) }
         followBarIfOn()
     }
 
     func toggleWidth(_ width: Double) {
         var widths = columnWidths
-        if let index = widths.firstIndex(where: { abs($0 - width) < 0.005 }) {
+        if let index = widths.firstIndex(where: { abs($0 - width) < 0.01 }) {
             guard widths.count > 1 else { return }  // keep at least one
             widths.remove(at: index)
         } else {
@@ -205,7 +239,7 @@ final class PaneruSettings: ObservableObject {
     }
 
     func hasWidth(_ width: Double) -> Bool {
-        columnWidths.contains { abs($0 - width) < 0.005 }
+        columnWidths.contains { abs($0 - width) < 0.01 }
     }
 
     func setResizeCycle(_ on: Bool) {

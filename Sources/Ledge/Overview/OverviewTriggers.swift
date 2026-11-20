@@ -1,10 +1,11 @@
 import AppKit
 import CoreGraphics
 
-/// Left Option + O, and only left: on a Polish layout right Option + O types
-/// "ó", so it must keep working. A Carbon hotkey can't tell the two Options
-/// apart, so this listens the way Paneru does (an event tap, needs
-/// Accessibility) and only swallows the exact combination.
+/// The overview's shortcut (Settings → Shortcuts, Super + O by default).
+/// Sides matter: with Left Option as Super, right Option + O must still type
+/// "ó" on a Polish layout. A Carbon hotkey can't tell the two Options apart,
+/// so this listens the way Paneru does (an event tap, needs Accessibility)
+/// and only swallows the exact combination.
 ///
 /// The tap sees every keystroke before any app does, so it lives on its own
 /// thread: whatever Ledge's main thread is busy with, typing never waits on it.
@@ -16,11 +17,18 @@ final class OverviewShortcut {
 
     /// Read on the tap's thread, written on main.
     private let lock = NSLock()
-    private var _enabled = true
+    private var _combo: Combo?
+    private var _paused = false
     private var _escapeArmed = false
-    var enabled: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _enabled }
-        set { lock.lock(); _enabled = newValue; lock.unlock() }
+    /// nil: no shortcut
+    var combo: Combo? {
+        get { lock.lock(); defer { lock.unlock() }; return _combo }
+        set { lock.lock(); _combo = newValue; lock.unlock() }
+    }
+    /// while Settings records a shortcut, so it can see this one too
+    var paused: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _paused }
+        set { lock.lock(); _paused = newValue; lock.unlock() }
     }
     var escapeArmed: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _escapeArmed }
@@ -33,21 +41,55 @@ final class OverviewShortcut {
     private var thread: Thread?
     var isRunning: Bool { tap != nil }
 
-    /// device-specific modifier bits in CGEventFlags
-    static let leftOption: UInt64 = 0x20
-    static let rightOption: UInt64 = 0x40
-    static let keyO: Int64 = 31
+    /// A shortcut as the tap checks it: the key, the modifier bits that must
+    /// be down and the ones that must not.
+    struct Combo: Equatable {
+        let keyCode: Int64
+        let required: UInt64
+        let forbidden: UInt64
 
-    /// The match itself, kept pure so it can be tested.
-    static func matches(keyCode: Int64, flags: UInt64, isRepeat: Bool) -> (match: Bool, fire: Bool) {
-        let option = CGEventFlags.maskAlternate.rawValue
-        let others = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue | CGEventFlags.maskShift.rawValue
-        let match = keyCode == keyO
-            && flags & option != 0
-            && flags & others == 0
-            && flags & leftOption != 0
-            && flags & rightOption == 0
-        return (match, match && !isRepeat)
+        /// device-specific modifier bits in CGEventFlags, left and right
+        static let sides: [ModifierFamily: (left: UInt64, right: UInt64)] = [
+            .control: (0x01, 0x2000), .shift: (0x02, 0x04), .command: (0x08, 0x10), .option: (0x20, 0x40),
+        ]
+        static let masks: [ModifierFamily: UInt64] = [
+            .control: CGEventFlags.maskControl.rawValue, .shift: CGEventFlags.maskShift.rawValue,
+            .command: CGEventFlags.maskCommand.rawValue, .option: CGEventFlags.maskAlternate.rawValue,
+        ]
+
+        /// From Paneru's spelling ("lalt - o"); nil for a key this layout lacks.
+        init?(_ combo: KeyCombo) {
+            guard let code = (0..<128).first(where: { KeyNames.name(keyCode: UInt16($0)) == combo.key }) else { return nil }
+            var required: UInt64 = 0
+            var forbidden: UInt64 = 0
+            for family in [ModifierFamily.control, .option, .shift, .command] {
+                let mask = Self.masks[family]!, side = Self.sides[family]!
+                let tokens = combo.tokens.filter { ModifierFamily(token: $0) == family }
+                if tokens.isEmpty {
+                    forbidden |= mask
+                    continue
+                }
+                required |= mask
+                if tokens.allSatisfy({ $0.hasPrefix("l") }) {
+                    required |= side.left
+                    forbidden |= side.right
+                } else if tokens.allSatisfy({ $0.hasPrefix("r") }) {
+                    required |= side.right
+                    forbidden |= side.left
+                }
+            }
+            self.init(keyCode: Int64(code), required: required, forbidden: forbidden)
+        }
+
+        init(keyCode: Int64, required: UInt64, forbidden: UInt64) {
+            self.keyCode = keyCode
+            self.required = required
+            self.forbidden = forbidden
+        }
+
+        func matches(keyCode: Int64, flags: UInt64) -> Bool {
+            keyCode == self.keyCode && flags & required == required && flags & forbidden == 0
+        }
     }
 
     @discardableResult
@@ -71,15 +113,10 @@ final class OverviewShortcut {
                 DispatchQueue.main.async { me.escapeAction() }
                 return nil
             }
-            guard me.enabled else { return Unmanaged.passUnretained(event) }
-
-            let result = OverviewShortcut.matches(
-                keyCode: keyCode,
-                flags: event.flags.rawValue,
-                isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-            )
-            guard result.match else { return Unmanaged.passUnretained(event) }
-            if result.fire {
+            guard !me.paused, let combo = me.combo,
+                  combo.matches(keyCode: keyCode, flags: event.flags.rawValue)
+            else { return Unmanaged.passUnretained(event) }
+            if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
                 DispatchQueue.main.async { me.action() }
             }
             return nil  // swallow, so no "ø" gets typed

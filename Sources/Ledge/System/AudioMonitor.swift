@@ -171,9 +171,12 @@ final class AudioMonitor: ObservableObject {
         setMuted(!muted)
     }
 
-    /// One step = 1/16, same as the volume keys.
+    /// One step = 5%, landing on the 5% grid: from 37% up is 40%, down is 35%.
     func step(_ steps: Int) {
-        guard let volume else { return }
-        setVolume(volume + Float(steps) / 16)
+        guard let volume, steps != 0 else { return }
+        let grid = volume * 20
+        // the small margin keeps a value that's on the grid on it
+        let base = steps > 0 ? (grid + 0.01).rounded(.down) : (grid - 0.01).rounded(.up)
+        setVolume((base + Float(steps)) / 20)
     }
 }

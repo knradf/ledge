@@ -30,6 +30,12 @@ struct WorkspacesView: View {
             }
         }
         .animation(Theme.animation, value: stale)
+        // the mouse wheel steps through workspaces; clicks go to the pills
+        .overlay {
+            if !paneru.appsOnly {
+                MouseCatcher(onScroll: { paneru.wheelStep(above: $0 > 0) }, onePerGesture: true, scrollOnly: true)
+            }
+        }
         // Minimal style: one highlight that slides to the active workspace
         // (the other styles fade each pill's own highlight in and out)
         .backgroundPreferenceValue(WorkspaceBoundsKey.self) { anchors in

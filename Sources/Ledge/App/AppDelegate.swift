@@ -62,6 +62,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    @objc func showSettings() {
+        SettingsWindowController.shared.show()
+    }
+
+    /// Opening Ledge again (Finder, Spotlight) while it runs shows Settings.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        SettingsWindowController.shared.show()
+        return false
+    }
+
     /// After a permission change, System Settings offers "Quit & Reopen":
     /// it quits Ledge and macOS opens it again. Started by install.sh's
     /// LaunchAgent, the reopen doesn't happen, so restart through launchd.
@@ -114,21 +124,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyAppearance(light: wallpaper.light, mode: LedgeSettings.shared.barAppearance)
     }
 
-    /// ⌥O and the hot corner. The shortcut needs Accessibility; until it's
+    /// Paneru's config, ready for Ledge: its empty init.lua swapped for a
+    /// paneru.toml, rules for Ledge's windows, shortcuts on a first run, the
+    /// top padding below the bar.
+    private func setUpPaneruConfig() {
+        guard !paneru.appsOnly else { return }
+        if PaneruConfig.replaceLuaStub(ledgeSwipesVertically: LedgeSettings.shared.desktopSwipe != .off) {
+            NSLog("Ledge: replaced Paneru's empty init.lua with paneru.toml, restarting Paneru")
+            paneru.restartPaneru()
+        }
+        // the file may have just appeared
+        PaneruSettings.shared.reload()
+        if PaneruSettings.shared.editable { PaneruConfig.addLedgeRules() }
+        if !UserDefaults.standard.bool(forKey: Onboarding.doneKey) {
+            PaneruShortcuts.shared.fillDefaultsIfEmpty()
+        }
+        PaneruSettings.shared.followBarIfOn()
+    }
+
+    /// The overview's shortcut and the hot corner. The shortcut needs Accessibility; until it's
     /// granted, retry whenever you come back from another app (e.g. Settings).
     private func startOverview() {
         OverviewController.shared.watch(paneru)
         WorkspaceSlide.shared.watch(paneru)
-        if !paneru.appsOnly,
-           PaneruConfig.replaceLuaStub(ledgeSwipesVertically: LedgeSettings.shared.desktopSwipe != .off) {
-            NSLog("Ledge: replaced Paneru's empty init.lua with paneru.toml, restarting Paneru")
-            PaneruSettings.shared.reload()
-            paneru.restartPaneru()
-        }
-        // keeps Paneru's top padding just below the bar
-        // before the bar padding: an install from before the welcome keeps its setting
+        // before the bar padding and shortcuts: an install from before the
+        // welcome keeps its settings
         Onboarding.shared.showIfNeeded(paneru: paneru)
-        PaneruSettings.shared.followBarIfOn()
+        // Paneru writes its config on its first launch, which on a fresh
+        // install comes after Ledge's (the welcome's Start Paneru), so check
+        // each time Paneru starts answering, not just now
+        setUpPaneruConfig()
+        paneru.$connected
+            .removeDuplicates()
+            .filter { $0 }
+            .sink { [weak self] _ in self?.setUpPaneruConfig() }
+            .store(in: &subscriptions)
 
         hotCorner.position = { LedgeSettings.shared.hotCorner }
         hotCorner.action = { OverviewController.shared.toggle() }
@@ -136,8 +166,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] corner in self?.hotCorner.update(corner) }
             .store(in: &subscriptions)
 
-        LedgeSettings.shared.$overviewShortcut
-            .sink { [weak self] on in self?.overviewShortcut.enabled = on }
+        LedgeSettings.shared.$overviewKey
+            .sink { [weak self] raw in
+                let combo = KeyCombo(raw: raw).flatMap(OverviewShortcut.Combo.init)
+                if combo == nil, !raw.isEmpty { NSLog("Ledge: the overview shortcut \(raw) isn't on this keyboard layout") }
+                self?.overviewShortcut.combo = combo
+            }
+            .store(in: &subscriptions)
+        ShortcutRecorder.shared.$recording
+            .sink { [weak self] id in self?.overviewShortcut.paused = id != nil }
             .store(in: &subscriptions)
         overviewShortcut.action = { OverviewController.shared.toggle() }
         overviewShortcut.escapeAction = { [weak self] in

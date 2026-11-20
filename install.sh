@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds Ledge, puts it in ~/Applications, starts it now and at every login,
+# Builds Ledge, puts it in /Applications, starts it now and at every login,
 # and turns SketchyBar off if it was running (uninstall.sh turns it back on).
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 ./build.sh
 
 LABEL="io.github.knradf.ledge"
-APP="$HOME/Applications/Ledge.app"
+APP="/Applications/Ledge.app"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 DOMAIN="gui/$(id -u)"
 
@@ -19,7 +19,9 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
-mkdir -p "$HOME/Applications" "$HOME/Library/LaunchAgents"
+mkdir -p "$HOME/Library/LaunchAgents"
+# older installs went to ~/Applications
+rm -rf "$HOME/Applications/Ledge.app"
 rm -rf "$APP"
 cp -R build/Ledge.app "$APP"
 
@@ -42,7 +44,7 @@ cat > "$PLIST" <<PLIST
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/ledge.log</string>
+    <string>/tmp/ledge_$(id -u).log</string>
 </dict>
 </plist>
 PLIST
@@ -57,4 +59,4 @@ if command -v brew >/dev/null 2>&1 && brew services list 2>/dev/null | grep -q '
 fi
 
 launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || launchctl kickstart -k "$DOMAIN/$LABEL"
-echo "Ledge is running. Log: /tmp/ledge.log"
+echo "Ledge is running. Log: /tmp/ledge_$(id -u).log"

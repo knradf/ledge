@@ -146,7 +146,7 @@ final class AudioActivity: ObservableObject {
         found.sort()
         report.sort()
         // which apps count as playing, and what each sound was put down to,
-        // in /tmp/ledge.log. Only when the apps change: system helpers
+        // in the log. Only when the apps change: system helpers
         // (CoreSpeech and friends) come and go all the time.
         if apps != found {
             NSLog("Ledge: playing: %@ (sound from %@)",

@@ -5,13 +5,17 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Settings window with toolbar tabs, like the system's own settings.
-/// Opened from the clock.
+/// Opened from the clock, or by opening Ledge again while it runs.
 ///
 /// General: how the bar looks. Behavior: the overview, swipes, slide (Paneru
 /// only). Rules: where apps open, which apps count as playing. Paneru: the
-/// window manager's own settings, written to its config. Permissions: what
-/// Ledge may do, media-control, reset.
-final class SettingsWindowController {
+/// window manager's own settings, written to its config. Shortcuts: Paneru's
+/// keyboard shortcuts. Permissions: what Ledge may do, media-control, reset.
+///
+/// While it's open Ledge is a regular app with a Dock icon, so you can find
+/// it with ⌘Tab; closing it makes Ledge a menu bar app again. Paneru tiles it
+/// thanks to a window rule (PaneruConfig.addLedgeRules).
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
 
@@ -22,7 +26,6 @@ final class SettingsWindowController {
             tabs.tabStyle = .toolbar
             // keep the window called "Ledge" instead of renaming it per tab
             tabs.canPropagateSelectedChildViewControllerTitle = false
-            tabs.preferredContentSize = Self.size
             let paneru = PaneruStore.findBinary() != nil
             add(to: tabs, title: "General", symbol: "gearshape", view: GeneralTab(settings: settings))
             // the overview and workspace switching need Paneru's workspaces
@@ -31,29 +34,48 @@ final class SettingsWindowController {
             }
             add(to: tabs, title: "Rules", symbol: "list.bullet.rectangle", view: RulesTab(settings: settings, paneru: paneru))
             add(to: tabs, title: "Paneru", symbol: "rectangle.split.3x1", view: PaneruTab(settings: settings))
+            if paneru {
+                add(to: tabs, title: "Shortcuts", symbol: "keyboard", view: ShortcutsTab())
+            }
             add(to: tabs, title: "Permissions", symbol: "hand.raised", view: PermissionsTab(settings: settings))
 
             let window = NSWindow(contentViewController: tabs)
-            window.styleMask = [.titled, .closable]
+            // resizable, so Paneru can tile it
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.title = "Ledge"
-            // the window must be exactly as big as the content, or SwiftUI
-            // centers the oversized form and every edge gets clipped
             window.setContentSize(Self.size)
-            window.contentMinSize = Self.size
-            window.contentMaxSize = Self.size
+            window.contentMinSize = Self.minSize
             window.toolbarStyle = .preference
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.center()
             self.window = window
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
     }
 
+    func close() {
+        window?.close()
+    }
+
+    /// The next show builds a new window: Paneru tiles windows as they're
+    /// created, and an old one shown again doesn't count as created.
+    func windowWillClose(_ notification: Notification) {
+        ShortcutRecorder.shared.stop()
+        window?.delegate = nil
+        window = nil
+        NSApp.setActivationPolicy(.accessory)
+    }
+
     private func add<V: View>(to tabs: NSTabViewController, title: String, symbol: String, view: V) {
-        let host = NSHostingController(rootView: AnyView(view.frame(width: Self.size.width, height: Self.size.height)))
-        host.sizingOptions = [.preferredContentSize]
-        host.preferredContentSize = Self.size
+        // fills whatever size the window has; no preferred size, so switching
+        // tabs doesn't resize a tiled window
+        let host = NSHostingController(rootView: AnyView(
+            view.frame(minWidth: Self.minSize.width, maxWidth: .infinity, minHeight: Self.minSize.height, maxHeight: .infinity)
+        ))
+        host.sizingOptions = []
         host.title = title
         let item = NSTabViewItem(viewController: host)
         item.label = title
@@ -62,6 +84,7 @@ final class SettingsWindowController {
     }
 
     static let size = CGSize(width: 560, height: 640)
+    static let minSize = CGSize(width: 480, height: 360)
 }
 
 // MARK: Permissions
@@ -75,7 +98,7 @@ struct PermissionsTab: View {
             Section {
                 PermissionRow(
                     title: "Accessibility",
-                    detail: "Focusing a window from the bar or overview, the ⌥O shortcut, three-finger swipes",
+                    detail: "Focusing a window from the bar or overview, the overview shortcut, three-finger swipes",
                     granted: permissions.accessibility,
                     pane: "Privacy_Accessibility"
                 ) {
@@ -174,13 +197,10 @@ struct GeneralTab: View {
     var body: some View {
         Form {
             Section("Appearance") {
-                Picker(selection: $settings.barStyle) {
+                Picker("Style", selection: $settings.barStyle) {
                     ForEach(BarStyle.allCases) { style in
                         Text(style.label).tag(style)
                     }
-                } label: {
-                    Text("Style")
-                    Text(styleNote)
                 }
                 .pickerStyle(.segmented)
                 Picker(selection: $settings.barAppearance) {
@@ -218,16 +238,13 @@ struct GeneralTab: View {
                 Section {
                     appStylePicker
                 } header: {
-                    Text("Open Apps")
+                    Text("Open apps")
                 } footer: {
                     Footnote("Without a window manager the bar shows your open apps. Click one to bring it forward.")
                 }
             } else {
                 Section("Workspaces") {
-                    Toggle(isOn: $settings.showEmptyWorkspaces) {
-                        Text("Show empty workspaces")
-                        Text("Every workspace up to the last one you use, plus one empty one after it.")
-                    }
+                    Toggle("Show empty workspaces", isOn: $settings.showEmptyWorkspaces)
                     Toggle("Workspace number", isOn: $settings.showNumbers)
                     Toggle("Apps", isOn: $settings.showApps)
                     appStylePicker
@@ -249,35 +266,18 @@ struct GeneralTab: View {
             }
         } label: {
             Text("App style")
-            if settings.showApps && settings.appStyle == .glyphs {
-                Text(GlyphMap.shared.available
-                     ? "Glyphs from sketchybar-app-font \(GlyphMap.shared.version ?? ""), built in. Apps without one get a generic glyph."
-                     : GlyphMap.shared.missingReason)
+            // only when something's wrong
+            if settings.showApps && settings.appStyle == .glyphs && !GlyphMap.shared.available {
+                Text(GlyphMap.shared.missingReason)
             }
         }
         .pickerStyle(.segmented)
     }
 
+    /// only when something's missing
     private var appearanceNote: String? {
-        switch settings.barAppearance {
-        case .wallpaper:
-            return permissions.screenRecording
-                ? "White text over a dark wallpaper, dark text over a light one, like the menu bar."
-                : "Needs Screen Recording (Permissions tab) to see what's behind the bar. Until then it follows the system."
-        case .system: return "Light or dark with the rest of macOS."
-        case .light, .dark: return nil
-        }
-    }
-
-    private var styleNote: String {
-        switch settings.barStyle {
-        case .glass:
-            return "Liquid Glass, like the rest of the system."
-        case .frosted:
-            return "The blur macOS uses for menus."
-        case .none:
-            return "No backgrounds, just text and icons over your wallpaper. The workspace highlight slides between workspaces."
-        }
+        guard settings.barAppearance == .wallpaper, !permissions.screenRecording else { return nil }
+        return "Needs Screen Recording (Permissions tab) to see what's behind the bar. Until then it follows the system."
     }
 }
 
@@ -301,8 +301,11 @@ struct BehaviorTab: View {
     var body: some View {
         Form {
             if PaneruStore.findBinary() != nil {
-                Section("Overview") {
-                    Toggle("Open with Left Option + O", isOn: $settings.overviewShortcut)
+                Section {
+                    LabeledContent("Keyboard shortcut") {
+                        Text(KeyCombo(raw: settings.overviewKey)?.display() ?? "None")
+                            .foregroundStyle(.secondary)
+                    }
                     Picker("Hot corner", selection: $settings.hotCorner) {
                         ForEach(HotCornerPosition.allCases) { corner in
                             Text(corner.label).tag(corner)
@@ -320,6 +323,10 @@ struct BehaviorTab: View {
                         Text("Reversed").tag(true)
                     }
                     .pickerStyle(.menu)
+                } header: {
+                    Text("Overview")
+                } footer: {
+                    Footnote("Change the keyboard shortcut in Shortcuts, with Paneru's.")
                 }
 
                 Section {
@@ -332,12 +339,10 @@ struct BehaviorTab: View {
                     PaneruSwipeHint(settings: settings)
                     Toggle(isOn: $settings.workspaceSlide) {
                         Text("Slide between workspaces (experimental)")
-                        Text("Ledge slides pictures of your workspaces, then shows the real one; windows are still for a moment. Best with Paneru's window movement set to Instant. Works when you switch from the bar or with Ledge's swipes; Paneru's own shortcuts still switch at once.")
+                        Text("Enables smooth vertical scrolling between workspaces")
                     }
                 } header: {
-                    Text("Switching Workspaces")
-                } footer: {
-                    Footnote("Sideways swipes stay with Paneru (Paneru tab). Paneru's own direction setting flips sideways swipes too, which is why Ledge can do up/down on its own.")
+                    Text("Switching workspaces")
                 }
             }
         }
@@ -389,7 +394,7 @@ struct PaneruTab: View {
                         Link("Paneru on GitHub", destination: URL(string: "https://github.com/karinushka/paneru")!)
                     } label: {
                         Text("Paneru isn't installed")
-                        Text("A scrolling tiling window manager. With it the bar shows workspaces, and you get the overview (⌥O), workspace swipes and rules for where apps open.")
+                        Text("A scrolling tiling window manager. With it the bar shows workspaces, and you get the overview, workspace swipes and rules for where apps open.")
                     }
                 }
             } else if !config.configFound {
@@ -418,16 +423,13 @@ struct PaneruTab: View {
     }
 
     private func padding(_ side: WritableKeyPath<PaneruSettings.EdgePadding, Int>) -> Binding<Double> {
-        Binding(get: { Double(config.padding[keyPath: side]) },
-                set: { config.setPadding(side, Int($0.rounded())) })
+        Binding(get: { Double(config.visibleEdge(side)) },
+                set: { config.setVisibleEdge(side, Int($0.rounded())) })
     }
 
     private var edgesSection: some View {
         Section {
-            Toggle(isOn: $settings.paneruTopFollowsBar) {
-                Text("Leave room for Ledge's bar")
-                Text("Windows start \(config.topForBar()) pt from the top: the same space below the bar as above it. It follows the bar when you change it.")
-            }
+            Toggle("Leave room for Ledge's bar", isOn: $settings.paneruTopFollowsBar)
             if !settings.paneruTopFollowsBar {
                 SliderRow(title: "Top", value: padding(\.top), range: 0...80)
             }
@@ -435,15 +437,13 @@ struct PaneruTab: View {
             SliderRow(title: "Right", value: padding(\.right), range: 0...48)
             SliderRow(title: "Bottom", value: padding(\.bottom), range: 0...48)
         } header: {
-            Text("Screen Edges")
-        } footer: {
-            Footnote("Space Paneru keeps free at each edge of the screen, on top of the space between windows.")
+            Text("Screen edges")
         }
     }
 
     private var widthChoices: [Double] {
         let extra = config.columnWidths.filter { width in
-            !PaneruSettings.widthChoices.contains { abs($0 - width) < 0.005 }
+            !PaneruSettings.widthChoices.contains { abs($0 - width) < 0.01 }
         }
         return (PaneruSettings.widthChoices + extra).sorted()
     }
@@ -453,25 +453,23 @@ struct PaneruTab: View {
             SliderRow(title: "Space between windows",
                       value: Binding(get: { Double(config.gap) }, set: { config.setGap(Int($0.rounded())) }),
                       range: 0...32, step: 2)
+            Text("Applies to windows as they open. Windows already open keep their spacing until Paneru restarts.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 8) {
                 Text("Column widths")
-                Text("The widths resizing steps through, as a share of the screen.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 6) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 52), spacing: 6)], alignment: .leading, spacing: 6) {
                     ForEach(widthChoices, id: \.self) { width in
                         Toggle(isOn: Binding(get: { config.hasWidth(width) }, set: { _ in config.toggleWidth(width) })) {
                             Text("\(Int((width * 100).rounded()))%")
                                 .monospacedDigit()
+                                .frame(maxWidth: .infinity)
                         }
                         .toggleStyle(.button)
                     }
                 }
             }
-            Toggle(isOn: Binding(get: { config.resizeCycle }, set: { config.setResizeCycle($0) })) {
-                Text("Start over after the widest")
-                Text("Off: resizing stops at the narrowest and widest instead of wrapping around.")
-            }
+            Toggle("Start over after the widest", isOn: Binding(get: { config.resizeCycle }, set: { config.setResizeCycle($0) }))
         } header: {
             Text("Windows")
         }
@@ -479,37 +477,25 @@ struct PaneruTab: View {
 
     private var focusSection: some View {
         Section {
-            Toggle(isOn: Binding(get: { config.focusFollowsMouse }, set: { config.setFocusFollowsMouse($0) })) {
-                Text("Focus follows mouse")
-                Text("Moving the pointer over a window focuses it.")
-            }
-            Toggle(isOn: Binding(get: { config.mouseFollowsFocus }, set: { config.setMouseFollowsFocus($0) })) {
-                Text("Mouse follows focus")
-                Text("The pointer jumps to a window when you focus it with the keyboard.")
-            }
-            Picker(selection: Binding(get: { config.bringIntoView }, set: { config.setBringIntoView($0) })) {
+            Toggle("Focus follows mouse", isOn: Binding(get: { config.focusFollowsMouse }, set: { config.setFocusFollowsMouse($0) }))
+            Toggle("Mouse follows focus", isOn: Binding(get: { config.mouseFollowsFocus }, set: { config.setMouseFollowsFocus($0) }))
+            Picker("Scroll a focused window into view", selection: Binding(get: { config.bringIntoView }, set: { config.setBringIntoView($0) })) {
                 ForEach(BringIntoView.allCases) { choice in
                     Text(choice.label).tag(choice)
                 }
-            } label: {
-                Text("Scroll a focused window into view")
-                Text("How much of a window may be off screen before focusing it scrolls the strip.")
             }
             .pickerStyle(.menu)
         } header: {
-            Text("Focus and Mouse")
+            Text("Focus and mouse")
         }
     }
 
     private var swipeSection: some View {
         Section {
-            Picker(selection: Binding(get: { config.stripSwipe }, set: { config.setStripSwipe($0) })) {
+            Picker("Three-finger sideways swipe", selection: Binding(get: { config.stripSwipe }, set: { config.setStripSwipe($0) })) {
                 ForEach(StripSwipe.allCases) { mode in
                     Text(mode.label).tag(mode)
                 }
-            } label: {
-                Text("Three-finger sideways swipe")
-                Text(config.stripSwipe.explanation)
             }
             .pickerStyle(.menu)
             if config.stripSwipe == .page {
@@ -527,28 +513,23 @@ struct PaneruTab: View {
                                           set: { config.setSwipeDeceleration(11 - $0) }),
                            range: 1...10, step: 0.5)
             }
+            Toggle("Slide past the first and last window",
+                   isOn: Binding(get: { config.slidePastEnds }, set: { config.setSlidePastEnds($0) }))
         } header: {
-            Text("Moving Between Windows")
-        } footer: {
-            Footnote("Glide and Settle and One Window at a Time also center a window when you move focus with the keyboard. Glide and Settle can't quite reach the first and last window: it pulls them toward the middle of the screen, which they can't reach, so they bounce back. That's Paneru.")
+            Text("Moving between windows")
         }
     }
 
     private var movementSection: some View {
         Section {
-            Picker(selection: Binding(get: { config.movement }, set: { config.setMovement($0) })) {
+            Picker("Window movement", selection: Binding(get: { config.movement }, set: { config.setMovement($0) })) {
                 ForEach(WindowMovement.allCases) { movement in
                     Text(movement.label).tag(movement)
                 }
-            } label: {
-                Text("Window movement")
-                Text("How windows travel when they move, scroll or resize.")
             }
             .pickerStyle(.segmented)
         } header: {
             Text("Animation")
-        } footer: {
-            Footnote("Paneru moves real windows, and macOS makes every app redraw as it's moved or resized, so some apps stutter, most of all while resizing. That's macOS, nothing Paneru or Ledge can smooth out. Ledge edits paneru.toml one line at a time and keeps your comments; the first change saves a backup next to it.")
         }
     }
 }
@@ -564,14 +545,6 @@ enum StripSwipe: String, CaseIterable, Identifiable {
         case .free: return "Free Scroll"
         case .settle: return "Glide and Settle"
         case .page: return "One Window at a Time"
-        }
-    }
-
-    var explanation: String {
-        switch self {
-        case .free: return "The strip slides with your fingers and stops wherever it stops."
-        case .settle: return "The strip glides, then settles with the nearest window centered."
-        case .page: return "Each stretch of the swipe moves to the next window and centers it."
         }
     }
 
@@ -658,9 +631,7 @@ struct PlayingIndicatorSection: View {
                 }
             }
         } header: {
-            Text("Playing Indicator")
-        } footer: {
-            Footnote("Which apps make the bars appear next to the clock and show up in the island.")
+            Text("Playing indicator")
         }
     }
 }
@@ -697,7 +668,7 @@ struct TrackInfoSection: View {
                 }())
             }
         } header: {
-            Text("Track Info and Controls")
+            Text("Track info and controls")
         } footer: {
             Footnote("macOS no longer lets apps read what's playing. media-control is a small free, open-source tool that can, installed with Homebrew.")
         }
@@ -780,9 +751,7 @@ struct OpenOnWorkspaceSection: View {
                     AddRuleMenu(settings: settings)
                 }
             } header: {
-                Text("Open on Workspace")
-            } footer: {
-                Footnote("When one of these apps opens, its window goes to that workspace and you stay where you are. Windows that are already open aren't moved.")
+                Text("Open on workspace")
             }
         }
     }
@@ -928,7 +897,7 @@ struct StatusSections: View {
                     StatusItemRow(entry: entry, settings: settings)
                 }
             } header: {
-                Text("Status Items")
+                Text("Status items")
             }
 
             Section {
@@ -944,8 +913,6 @@ struct StatusSections: View {
                 }
             } header: {
                 Text("Arrangement")
-            } footer: {
-                Footnote("Drag to reorder, or right-click a row. A divider starts a new pill.")
             }
         }
     }
